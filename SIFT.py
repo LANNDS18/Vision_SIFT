@@ -9,47 +9,43 @@ import cv2
 from numpy import all, exp, logical_and, roll, sqrt, stack, trace, deg2rad, rad2deg, where, zeros, floor, round, float32
 from functools import cmp_to_key
 
-float_tolerance = 1e-7
+float_tolerance = 1e-8
 img = cv2.imread('COMP338_Assignment1_Dataset/Training/airplanes/0001.jpg')
-np.set_printoptions(suppress=True)
 
 
 def computeKeypointsAndDescriptors(image, sigma=1.6, num_intervals=3, assumed_blur=0.5, image_border_width=5):
-    """Compute SIFT keypoints and descriptors for an input image
-    """
     image = image.astype('float32')
-    base_image = generateBaseImage(image, sigma, assumed_blur)
-    num_octaves = computeNumberOfOctaves(base_image.shape)
-    gaussian_kernels = generateGaussianKernels(sigma, num_intervals)
+    base_image = resize_image(image, sigma, assumed_blur)
+    num_octaves = compute_octaves(base_image.shape)
+    gaussian_kernels = get_gaussian_kernels(sigma, num_intervals)
     gaussian_images = generateGaussianImages(base_image, num_octaves, gaussian_kernels)
     dog_images = generateDoGImages(gaussian_images)
-    keypoints = findScaleSpaceExtrema(gaussian_images, dog_images, num_intervals, sigma, image_border_width)
-    keypoints = removeDuplicateKeypoints(keypoints)
-    keypoints = convertKeypointsToInputImageSize(keypoints)
-    descriptors = generateDescriptors(keypoints, gaussian_images)
-    return keypoints, descriptors
+    key_points = find_scale_extrema(gaussian_images, dog_images, num_intervals, sigma, image_border_width)
+    key_points = removeDuplicateKeypoints(key_points)
+    key_points = convertKeypointsToInputImageSize(key_points)
+    descriptors = generateDescriptors(key_points, gaussian_images)
+    return key_points, descriptors
 
 
 # double the image and apply Gaussian blur
-def generateBaseImage(image, sigma, assumed_blur):
+def resize_image(image, sigma, assumed_blur):
     image = cv2.resize(image, (0, 0), fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
     sigma_diff = np.sqrt(max((sigma ** 2) - ((2 * assumed_blur) ** 2), 0.01))
-    return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma_diff,
-                            sigmaY=sigma_diff)  # the image blur is now sigma instead of assumed_blur
+    return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma_diff)
 
 
 # Compute number of octaves in DoG
-def computeNumberOfOctaves(image_shape): return int(np.round(np.log(min(image_shape)) / np.log(2) - 1))
+def compute_octaves(image_shape): return int(np.round(np.log(min(image_shape)) / np.log(2) - 1))
 
 
 # Generate some kernels for images based on the sigma and num_intervals
-def generateGaussianKernels(sigma, num_intervals):
-    num_images_per_octave = num_intervals + 3  # Generate num_intervals + 3 - 1 images per octave
+def get_gaussian_kernels(sigma, num_intervals):
+    num_layers_per_octave = num_intervals + 3  # Generate num_intervals + 3 - 1 images per octave
     k = 2 ** (1. / num_intervals)
     # scale of gaussian blur necessary to go from one blur scale to the next within an octave
-    gaussian_kernels = np.zeros(num_images_per_octave)
+    gaussian_kernels = np.zeros(num_layers_per_octave)
     gaussian_kernels[0] = sigma
-    for image_index in range(1, num_images_per_octave):
+    for image_index in range(1, num_layers_per_octave):
         sigma_previous = (k ** (image_index - 1)) * sigma
         sigma_total = k * sigma_previous
         gaussian_kernels[image_index] = np.sqrt(sigma_total ** 2 - sigma_previous ** 2)
@@ -68,7 +64,7 @@ def generateGaussianImages(image, num_octaves, gaussian_kernels):
         octave_base = gaussian_images_in_octave[-3]
         image = cv2.resize(octave_base, (int(octave_base.shape[1] / 2), int(octave_base.shape[0] / 2)),
                            interpolation=cv2.INTER_NEAREST)
-    return np.array(gaussian_images)
+    return np.array(gaussian_images, dtype=object)
 
 
 # Generate DoG images
@@ -81,49 +77,47 @@ def generateDoGImages(gaussian_images):
             # ordinary subtraction will not work because the images are unsigned integers
             dog_images_in_octave.append(cv2.subtract(second_image, first_image))
         dog_images.append(dog_images_in_octave)
-    return np.array(dog_images)
+    return np.array(dog_images, dtype=object)
 
 
-def findScaleSpaceExtrema(gaussian_images, dog_images, num_intervals, sigma, image_border_width, contrast_threshold=0.04):
-    """Find pixel positions of all scale-space extrema in the image pyramid
-    """
+def find_scale_extrema(gaussian_images, dog_images, num_intervals, sigma, image_border_width, contrast_threshold=0.04):
     threshold = floor(0.5 * contrast_threshold / num_intervals * 255)  # from OpenCV implementation
-    keypoints = []
+    key_points = []
 
     for octave_index, dog_images_in_octave in enumerate(dog_images):
         for image_index, (first_image, second_image, third_image) in enumerate(zip(dog_images_in_octave, dog_images_in_octave[1:], dog_images_in_octave[2:])):
             # (i, j) is the center of the 3x3 array
             for i in range(image_border_width, first_image.shape[0] - image_border_width):
                 for j in range(image_border_width, first_image.shape[1] - image_border_width):
-                    if isPixelAnExtremum(first_image[i-1:i+2, j-1:j+2], second_image[i-1:i+2, j-1:j+2], third_image[i-1:i+2, j-1:j+2], threshold):
+                    if is_pixel_extrema(first_image[i - 1:i + 2, j - 1:j + 2], second_image[i - 1:i + 2, j - 1:j + 2], third_image[i - 1:i + 2, j - 1:j + 2], threshold):
                         localization_result = localizeExtremumViaQuadraticFit(i, j, image_index + 1, octave_index, num_intervals, dog_images_in_octave, sigma, contrast_threshold, image_border_width)
                         if localization_result is not None:
                             keypoint, localized_image_index = localization_result
-                            keypoints_with_orientations = computeKeypointsWithOrientations(keypoint, octave_index, gaussian_images[octave_index][localized_image_index])
-                            for keypoint_with_orientation in keypoints_with_orientations:
-                                keypoints.append(keypoint_with_orientation)
-    return keypoints
+                            points_with_orientations = computeKeypointsWithOrientations(keypoint, octave_index, gaussian_images[octave_index][localized_image_index])
+                            for keypoint_with_orientation in points_with_orientations:
+                                key_points.append(keypoint_with_orientation)
+    return key_points
 
 
-def isPixelAnExtremum(first_subimage, second_subimage, third_subimage, threshold):
+def is_pixel_extrema(first_sub_image, second_sub_image, third_sub_image, threshold):
     """Return True if the center element of the 3x3x3 input array is strictly greater than or less than all its neighbors, False otherwise
     """
-    center_pixel_value = second_subimage[1, 1]
+    center_pixel_value = second_sub_image[1, 1]
     if abs(center_pixel_value) > threshold:
         if center_pixel_value > 0:
-            return all(center_pixel_value >= first_subimage) and \
-                   all(center_pixel_value >= third_subimage) and \
-                   all(center_pixel_value >= second_subimage[0, :]) and \
-                   all(center_pixel_value >= second_subimage[2, :]) and \
-                   center_pixel_value >= second_subimage[1, 0] and \
-                   center_pixel_value >= second_subimage[1, 2]
+            return all(center_pixel_value >= first_sub_image) and \
+                   all(center_pixel_value >= third_sub_image) and \
+                   all(center_pixel_value >= second_sub_image[0, :]) and \
+                   all(center_pixel_value >= second_sub_image[2, :]) and \
+                   center_pixel_value >= second_sub_image[1, 0] and \
+                   center_pixel_value >= second_sub_image[1, 2]
         elif center_pixel_value < 0:
-            return all(center_pixel_value <= first_subimage) and \
-                   all(center_pixel_value <= third_subimage) and \
-                   all(center_pixel_value <= second_subimage[0, :]) and \
-                   all(center_pixel_value <= second_subimage[2, :]) and \
-                   center_pixel_value <= second_subimage[1, 0] and \
-                   center_pixel_value <= second_subimage[1, 2]
+            return all(center_pixel_value <= first_sub_image) and \
+                   all(center_pixel_value <= third_sub_image) and \
+                   all(center_pixel_value <= second_sub_image[0, :]) and \
+                   all(center_pixel_value <= second_sub_image[2, :]) and \
+                   center_pixel_value <= second_sub_image[1, 0] and \
+                   center_pixel_value <= second_sub_image[1, 2]
     return False
 
 
@@ -133,7 +127,6 @@ def localizeExtremumViaQuadraticFit(i, j, image_index, octave_index, num_interva
     extremum_is_outside_image = False
     image_shape = dog_images_in_octave[0].shape
     for attempt_index in range(num_attempts_until_convergence):
-        # need to convert from uint8 to float32 to compute derivatives and need to rescale pixel values to [0, 1] to apply Lowe's thresholds
         first_image, second_image, third_image = dog_images_in_octave[image_index-1:image_index+2]
         pixel_cube = stack([first_image[i-1:i+2, j-1:j+2],
                             second_image[i-1:i+2, j-1:j+2],
@@ -154,8 +147,8 @@ def localizeExtremumViaQuadraticFit(i, j, image_index, octave_index, num_interva
         return None
     if attempt_index >= num_attempts_until_convergence - 1:
         return None
-    functionValueAtUpdatedExtremum = pixel_cube[1, 1, 1] + 0.5 * np.dot(gradient, extremum_update)
-    if abs(functionValueAtUpdatedExtremum) * num_intervals >= contrast_threshold:
+    function_value_at_updated_extremum = pixel_cube[1, 1, 1] + 0.5 * np.dot(gradient, extremum_update)
+    if abs(function_value_at_updated_extremum) * num_intervals >= contrast_threshold:
         xy_hessian = hessian[:2, :2]
         xy_hessian_trace = trace(xy_hessian)
         xy_hessian_det = np.linalg.det(xy_hessian)
@@ -165,7 +158,7 @@ def localizeExtremumViaQuadraticFit(i, j, image_index, octave_index, num_interva
             keypoint.pt = ((j + extremum_update[0]) * (2 ** octave_index), (i + extremum_update[1]) * (2 ** octave_index))
             keypoint.octave = octave_index + image_index * (2 ** 8) + int(round((extremum_update[2] + 0.5) * 255)) * (2 ** 16)
             keypoint.size = sigma * (2 ** ((image_index + extremum_update[2]) / float32(num_intervals))) * (2 ** (octave_index + 1))  # octave_index + 1 because the input image was doubled
-            keypoint.response = abs(functionValueAtUpdatedExtremum)
+            keypoint.response = abs(function_value_at_updated_extremum)
             return keypoint, image_index
     return None
 
@@ -200,6 +193,7 @@ def computeHessianAtCenterPixel(pixel_array):
     return np.array([[dxx, dxy, dxs],
                   [dxy, dyy, dys],
                   [dxs, dys, dss]])
+
 
 def computeKeypointsWithOrientations(keypoint, octave_index, gaussian_image, radius_factor=3, num_bins=36, peak_ratio=0.8, scale_factor=1.5):
     """Compute orientations for each keypoint
@@ -245,6 +239,7 @@ def computeKeypointsWithOrientations(keypoint, octave_index, gaussian_image, rad
             new_keypoint = cv2.KeyPoint(*keypoint.pt, keypoint.size, orientation, keypoint.response, keypoint.octave)
             keypoints_with_orientations.append(new_keypoint)
     return keypoints_with_orientations
+
 
 def compareKeypoints(keypoint1, keypoint2):
     """Return True if keypoint1 is less than keypoint2
@@ -294,6 +289,7 @@ def convertKeypointsToInputImageSize(keypoints):
         converted_keypoints.append(keypoint)
     return converted_keypoints
 
+
 def unpackOctave(keypoint):
     """Compute octave, layer, and scale from a keypoint
     """
@@ -303,6 +299,7 @@ def unpackOctave(keypoint):
         octave = octave | -128
     scale = 1 / float32(1 << octave) if octave >= 0 else float32(1 << -octave)
     return octave, layer, scale
+
 
 def generateDescriptors(keypoints, gaussian_images, window_width=4, num_bins=8, scale_multiplier=3, descriptor_max_value=0.2):
     """Generate descriptors for each keypoint
