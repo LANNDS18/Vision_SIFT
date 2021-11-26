@@ -9,8 +9,7 @@ import cv2
 from numpy import all, exp, logical_and, roll, sqrt, stack, trace, deg2rad, rad2deg, where, zeros, floor, round, float32
 from functools import cmp_to_key
 
-float_tolerance = 1e-8
-img = cv2.imread('COMP338_Assignment1_Dataset/Training/airplanes/0001.jpg')
+float_tolerance = 1e-7
 
 
 def computeKeypointsAndDescriptors(image, sigma=1.6, num_intervals=3, assumed_blur=0.5, image_border_width=5):
@@ -85,15 +84,22 @@ def find_scale_extrema(gaussian_images, dog_images, num_intervals, sigma, image_
     key_points = []
 
     for octave_index, dog_images_in_octave in enumerate(dog_images):
-        for image_index, (first_image, second_image, third_image) in enumerate(zip(dog_images_in_octave, dog_images_in_octave[1:], dog_images_in_octave[2:])):
+        for image_index, (first_image, second_image, third_image) in enumerate(
+                zip(dog_images_in_octave, dog_images_in_octave[1:], dog_images_in_octave[2:])):
             # (i, j) is the center of the 3x3 array
             for i in range(image_border_width, first_image.shape[0] - image_border_width):
                 for j in range(image_border_width, first_image.shape[1] - image_border_width):
-                    if is_pixel_extrema(first_image[i - 1:i + 2, j - 1:j + 2], second_image[i - 1:i + 2, j - 1:j + 2], third_image[i - 1:i + 2, j - 1:j + 2], threshold):
-                        localization_result = localizeExtremumViaQuadraticFit(i, j, image_index + 1, octave_index, num_intervals, dog_images_in_octave, sigma, contrast_threshold, image_border_width)
+                    if is_pixel_extrema(first_image[i - 1:i + 2, j - 1:j + 2], second_image[i - 1:i + 2, j - 1:j + 2],
+                                        third_image[i - 1:i + 2, j - 1:j + 2], threshold):
+                        localization_result = localizeExtremumViaQuadraticFit(i, j, image_index + 1, octave_index,
+                                                                              num_intervals, dog_images_in_octave,
+                                                                              sigma, contrast_threshold,
+                                                                              image_border_width)
                         if localization_result is not None:
                             keypoint, localized_image_index = localization_result
-                            points_with_orientations = computeKeypointsWithOrientations(keypoint, octave_index, gaussian_images[octave_index][localized_image_index])
+                            points_with_orientations = computeKeypointsWithOrientations(keypoint, octave_index,
+                                                                                        gaussian_images[octave_index][
+                                                                                            localized_image_index])
                             for keypoint_with_orientation in points_with_orientations:
                                 key_points.append(keypoint_with_orientation)
     return key_points
@@ -121,16 +127,18 @@ def is_pixel_extrema(first_sub_image, second_sub_image, third_sub_image, thresho
     return False
 
 
-def localizeExtremumViaQuadraticFit(i, j, image_index, octave_index, num_intervals, dog_images_in_octave, sigma, contrast_threshold, image_border_width, eigenvalue_ratio=10, num_attempts_until_convergence=5):
+def localizeExtremumViaQuadraticFit(i, j, image_index, octave_index, num_intervals, dog_images_in_octave, sigma,
+                                    contrast_threshold, image_border_width, eigenvalue_ratio=10,
+                                    num_attempts_until_convergence=5):
     """Iteratively refine pixel positions of scale-space extrema via quadratic fit around each extremum's neighbors
     """
     extremum_is_outside_image = False
     image_shape = dog_images_in_octave[0].shape
     for attempt_index in range(num_attempts_until_convergence):
-        first_image, second_image, third_image = dog_images_in_octave[image_index-1:image_index+2]
-        pixel_cube = stack([first_image[i-1:i+2, j-1:j+2],
-                            second_image[i-1:i+2, j-1:j+2],
-                            third_image[i-1:i+2, j-1:j+2]]).astype('float32') / 255.
+        first_image, second_image, third_image = dog_images_in_octave[image_index - 1:image_index + 2]
+        pixel_cube = stack([first_image[i - 1:i + 2, j - 1:j + 2],
+                            second_image[i - 1:i + 2, j - 1:j + 2],
+                            third_image[i - 1:i + 2, j - 1:j + 2]]).astype('float32') / 255.
         gradient = computeGradientAtCenterPixel(pixel_cube)
         hessian = computeHessianAtCenterPixel(pixel_cube)
         extremum_update = -np.linalg.lstsq(hessian, gradient, rcond=None)[0]
@@ -140,7 +148,8 @@ def localizeExtremumViaQuadraticFit(i, j, image_index, octave_index, num_interva
         i += int(round(extremum_update[1]))
         image_index += int(round(extremum_update[2]))
         # make sure the new pixel_cube will lie entirely within the image
-        if i < image_border_width or i >= image_shape[0] - image_border_width or j < image_border_width or j >= image_shape[1] - image_border_width or image_index < 1 or image_index > num_intervals:
+        if i < image_border_width or i >= image_shape[0] - image_border_width or j < image_border_width or j >= \
+                image_shape[1] - image_border_width or image_index < 1 or image_index > num_intervals:
             extremum_is_outside_image = True
             break
     if extremum_is_outside_image:
@@ -152,12 +161,16 @@ def localizeExtremumViaQuadraticFit(i, j, image_index, octave_index, num_interva
         xy_hessian = hessian[:2, :2]
         xy_hessian_trace = trace(xy_hessian)
         xy_hessian_det = np.linalg.det(xy_hessian)
-        if xy_hessian_det > 0 and eigenvalue_ratio * (xy_hessian_trace ** 2) < ((eigenvalue_ratio + 1) ** 2) * xy_hessian_det:
+        if xy_hessian_det > 0 and eigenvalue_ratio * (xy_hessian_trace ** 2) < (
+                (eigenvalue_ratio + 1) ** 2) * xy_hessian_det:
             # Contrast check passed -- construct and return OpenCV KeyPoint object
             keypoint = cv2.KeyPoint()
-            keypoint.pt = ((j + extremum_update[0]) * (2 ** octave_index), (i + extremum_update[1]) * (2 ** octave_index))
-            keypoint.octave = octave_index + image_index * (2 ** 8) + int(round((extremum_update[2] + 0.5) * 255)) * (2 ** 16)
-            keypoint.size = sigma * (2 ** ((image_index + extremum_update[2]) / float32(num_intervals))) * (2 ** (octave_index + 1))  # octave_index + 1 because the input image was doubled
+            keypoint.pt = (
+            (j + extremum_update[0]) * (2 ** octave_index), (i + extremum_update[1]) * (2 ** octave_index))
+            keypoint.octave = octave_index + image_index * (2 ** 8) + int(round((extremum_update[2] + 0.5) * 255)) * (
+                        2 ** 16)
+            keypoint.size = sigma * (2 ** ((image_index + extremum_update[2]) / float32(num_intervals))) * (
+                        2 ** (octave_index + 1))  # octave_index + 1 because the input image was doubled
             keypoint.response = abs(function_value_at_updated_extremum)
             return keypoint, image_index
     return None
@@ -191,17 +204,19 @@ def computeHessianAtCenterPixel(pixel_array):
     dxs = 0.25 * (pixel_array[2, 1, 2] - pixel_array[2, 1, 0] - pixel_array[0, 1, 2] + pixel_array[0, 1, 0])
     dys = 0.25 * (pixel_array[2, 2, 1] - pixel_array[2, 0, 1] - pixel_array[0, 2, 1] + pixel_array[0, 0, 1])
     return np.array([[dxx, dxy, dxs],
-                  [dxy, dyy, dys],
-                  [dxs, dys, dss]])
+                     [dxy, dyy, dys],
+                     [dxs, dys, dss]])
 
 
-def computeKeypointsWithOrientations(keypoint, octave_index, gaussian_image, radius_factor=3, num_bins=36, peak_ratio=0.8, scale_factor=1.5):
+def computeKeypointsWithOrientations(keypoint, octave_index, gaussian_image, radius_factor=3, num_bins=36,
+                                     peak_ratio=0.8, scale_factor=1.5):
     """Compute orientations for each keypoint
     """
     keypoints_with_orientations = []
     image_shape = gaussian_image.shape
 
-    scale = scale_factor * keypoint.size / float32(2 ** (octave_index + 1))  # compare with keypoint.size computation in localizeExtremumViaQuadraticFit()
+    scale = scale_factor * keypoint.size / float32(
+        2 ** (octave_index + 1))  # compare with keypoint.size computation in localizeExtremumViaQuadraticFit()
     radius = int(round(radius_factor * scale))
     weight_factor = -0.5 / (scale ** 2)
     raw_histogram = zeros(num_bins)
@@ -217,14 +232,17 @@ def computeKeypointsWithOrientations(keypoint, octave_index, gaussian_image, rad
                     dy = gaussian_image[region_y - 1, region_x] - gaussian_image[region_y + 1, region_x]
                     gradient_magnitude = sqrt(dx * dx + dy * dy)
                     gradient_orientation = rad2deg(np.arctan2(dy, dx))
-                    weight = exp(weight_factor * (i ** 2 + j ** 2))  # constant in front of exponential can be dropped because we will find peaks later
+                    weight = exp(weight_factor * (
+                                i ** 2 + j ** 2))  # constant in front of exponential can be dropped because we will find peaks later
                     histogram_index = int(round(gradient_orientation * num_bins / 360.))
                     raw_histogram[histogram_index % num_bins] += weight * gradient_magnitude
 
     for n in range(num_bins):
-        smooth_histogram[n] = (6 * raw_histogram[n] + 4 * (raw_histogram[n - 1] + raw_histogram[(n + 1) % num_bins]) + raw_histogram[n - 2] + raw_histogram[(n + 2) % num_bins]) / 16.
+        smooth_histogram[n] = (6 * raw_histogram[n] + 4 * (raw_histogram[n - 1] + raw_histogram[(n + 1) % num_bins]) +
+                               raw_histogram[n - 2] + raw_histogram[(n + 2) % num_bins]) / 16.
     orientation_max = max(smooth_histogram)
-    orientation_peaks = where(logical_and(smooth_histogram > roll(smooth_histogram, 1), smooth_histogram > roll(smooth_histogram, -1)))[0]
+    orientation_peaks = \
+    where(logical_and(smooth_histogram > roll(smooth_histogram, 1), smooth_histogram > roll(smooth_histogram, -1)))[0]
     for peak_index in orientation_peaks:
         peak_value = smooth_histogram[peak_index]
         if peak_value >= peak_ratio * orientation_max:
@@ -232,7 +250,8 @@ def computeKeypointsWithOrientations(keypoint, octave_index, gaussian_image, rad
             # The interpolation update is given by equation (6.30) in https://ccrma.stanford.edu/~jos/sasp/Quadratic_Interpolation_Spectral_Peaks.html
             left_value = smooth_histogram[(peak_index - 1) % num_bins]
             right_value = smooth_histogram[(peak_index + 1) % num_bins]
-            interpolated_peak_index = (peak_index + 0.5 * (left_value - right_value) / (left_value - 2 * peak_value + right_value)) % num_bins
+            interpolated_peak_index = (peak_index + 0.5 * (left_value - right_value) / (
+                        left_value - 2 * peak_value + right_value)) % num_bins
             orientation = 360. - interpolated_peak_index * 360. / num_bins
             if abs(orientation - 360.) < float_tolerance:
                 orientation = 0
@@ -271,9 +290,9 @@ def removeDuplicateKeypoints(keypoints):
     for next_keypoint in keypoints[1:]:
         last_unique_keypoint = unique_keypoints[-1]
         if last_unique_keypoint.pt[0] != next_keypoint.pt[0] or \
-           last_unique_keypoint.pt[1] != next_keypoint.pt[1] or \
-           last_unique_keypoint.size != next_keypoint.size or \
-           last_unique_keypoint.angle != next_keypoint.angle:
+                last_unique_keypoint.pt[1] != next_keypoint.pt[1] or \
+                last_unique_keypoint.size != next_keypoint.size or \
+                last_unique_keypoint.angle != next_keypoint.angle:
             unique_keypoints.append(next_keypoint)
     return unique_keypoints
 
@@ -301,7 +320,8 @@ def unpackOctave(keypoint):
     return octave, layer, scale
 
 
-def generateDescriptors(keypoints, gaussian_images, window_width=4, num_bins=8, scale_multiplier=3, descriptor_max_value=0.2):
+def generateDescriptors(keypoints, gaussian_images, window_width=4, num_bins=8, scale_multiplier=3,
+                        descriptor_max_value=0.2):
     """Generate descriptors for each keypoint
     """
     descriptors = []
@@ -320,12 +340,14 @@ def generateDescriptors(keypoints, gaussian_images, window_width=4, num_bins=8, 
         col_bin_list = []
         magnitude_list = []
         orientation_bin_list = []
-        histogram_tensor = zeros((window_width + 2, window_width + 2, num_bins))   # first two dimensions are increased by 2 to account for border effects
+        histogram_tensor = zeros((window_width + 2, window_width + 2,
+                                  num_bins))  # first two dimensions are increased by 2 to account for border effects
 
         # Descriptor window size (described by half_width) follows OpenCV convention
         hist_width = scale_multiplier * 0.5 * scale * keypoint.size
-        half_width = int(round(hist_width * sqrt(2) * (window_width + 1) * 0.5))   # sqrt(2) corresponds to diagonal length of a pixel
-        half_width = int(min(half_width, sqrt(num_rows ** 2 + num_cols ** 2)))     # ensure half_width lies within image
+        half_width = int(
+            round(hist_width * sqrt(2) * (window_width + 1) * 0.5))  # sqrt(2) corresponds to diagonal length of a pixel
+        half_width = int(min(half_width, sqrt(num_rows ** 2 + num_cols ** 2)))  # ensure half_width lies within image
 
         for row in range(-half_width, half_width + 1):
             for col in range(-half_width, half_width + 1):
@@ -347,7 +369,8 @@ def generateDescriptors(keypoints, gaussian_images, window_width=4, num_bins=8, 
                         magnitude_list.append(weight * gradient_magnitude)
                         orientation_bin_list.append((gradient_orientation - angle) * bins_per_degree)
 
-        for row_bin, col_bin, magnitude, orientation_bin in zip(row_bin_list, col_bin_list, magnitude_list, orientation_bin_list):
+        for row_bin, col_bin, magnitude, orientation_bin in zip(row_bin_list, col_bin_list, magnitude_list,
+                                                                orientation_bin_list):
             # Smoothing via trilinear interpolation
             # Notations follows https://en.wikipedia.org/wiki/Trilinear_interpolation
             # Note that we are really doing the inverse of trilinear interpolation here (we take the center value of the cube and distribute it among its eight neighbors)
